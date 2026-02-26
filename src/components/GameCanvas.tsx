@@ -16,6 +16,13 @@ interface GameCanvasProps {
   onExit: () => void;
 }
 
+// Определение мобильного устройства
+const isMobile = () => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+         ('ontouchstart' in window) || 
+         (window.innerWidth <= 768);
+};
+
 // Константы карты
 const MAP_WIDTH = 1600;
 const MAP_HEIGHT = 1000;
@@ -163,6 +170,13 @@ export default function GameCanvas({
   const lastTimeRef = useRef<number>(0);
   const invulnerableRef = useRef<number>(0);
   
+  // Мобильное управление
+  const [isMobileDevice] = useState(() => isMobile());
+  const [joystickActive, setJoystickActive] = useState(false);
+  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
+  const joystickDeltaRef = useRef({ x: 0, y: 0 });
+  const joystickCenterRef = useRef({ x: 0, y: 0 });
+  
   // Позиция лифта
   const elevatorPos = { x: MAP_WIDTH / 2, y: 50 };
   
@@ -287,6 +301,68 @@ export default function GameCanvas({
     }
   }, [toon]);
   
+  // Мобильные обработчики джойстика
+  const handleJoystickStart = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    joystickCenterRef.current = { x: centerX, y: centerY };
+    setJoystickActive(true);
+    
+    const deltaX = touch.clientX - centerX;
+    const deltaY = touch.clientY - centerY;
+    setJoystickPos({ x: deltaX, y: deltaY });
+    joystickDeltaRef.current = { x: deltaX, y: deltaY };
+  }, []);
+  
+  const handleJoystickMove = useCallback((e: React.TouchEvent) => {
+    if (!joystickActive) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    
+    let deltaX = touch.clientX - joystickCenterRef.current.x;
+    let deltaY = touch.clientY - joystickCenterRef.current.y;
+    
+    // Ограничиваем радиус джойстика
+    const distance = Math.hypot(deltaX, deltaY);
+    const maxRadius = 50;
+    if (distance > maxRadius) {
+      deltaX = (deltaX / distance) * maxRadius;
+      deltaY = (deltaY / distance) * maxRadius;
+    }
+    
+    setJoystickPos({ x: deltaX, y: deltaY });
+    joystickDeltaRef.current = { x: deltaX, y: deltaY };
+  }, [joystickActive]);
+  
+  const handleJoystickEnd = useCallback(() => {
+    setJoystickActive(false);
+    setJoystickPos({ x: 0, y: 0 });
+    joystickDeltaRef.current = { x: 0, y: 0 };
+  }, []);
+  
+  // Мобильное взаимодействие с машиной
+  const handleMobileInteract = useCallback(() => {
+    if (activeMachine || isPanicMode) return;
+    
+    const nearMachine = machines.find(m => 
+      !m.filled && Math.hypot(playerPosRef.current.x - m.position.x, playerPosRef.current.y - m.position.y) < 60
+    );
+    if (nearMachine) {
+      setActiveMachine(nearMachine);
+    }
+  }, [activeMachine, isPanicMode, machines]);
+  
+  // Мобильная активация способности
+  const handleMobileAbility = useCallback(() => {
+    if (abilityCooldown <= 0 && toon.ability.type === 'active') {
+      activateAbility();
+    }
+  }, [abilityCooldown, toon.ability.type, activateAbility]);
+  
   // Завершение мини-игры
   const handleMiniGameComplete = useCallback((success: boolean) => {
     if (success && activeMachine) {
@@ -388,10 +464,19 @@ export default function GameCanvas({
       let dx = 0;
       let dy = 0;
       
+      // Клавиатура
       if (keysRef.current.has('w') || keysRef.current.has('arrowup')) dy -= speed * deltaTime;
       if (keysRef.current.has('s') || keysRef.current.has('arrowdown')) dy += speed * deltaTime;
       if (keysRef.current.has('a') || keysRef.current.has('arrowleft')) dx -= speed * deltaTime;
       if (keysRef.current.has('d') || keysRef.current.has('arrowright')) dx += speed * deltaTime;
+      
+      // Мобильный джойстик
+      if (joystickDeltaRef.current.x !== 0 || joystickDeltaRef.current.y !== 0) {
+        const magnitude = Math.hypot(joystickDeltaRef.current.x, joystickDeltaRef.current.y);
+        const normalizedMagnitude = Math.min(magnitude / 50, 1); // 50 - радиус джойстика
+        dx += (joystickDeltaRef.current.x / magnitude) * speed * deltaTime * normalizedMagnitude;
+        dy += (joystickDeltaRef.current.y / magnitude) * speed * deltaTime * normalizedMagnitude;
+      }
       
       if (dx !== 0 || dy !== 0) {
         // Проверка коллизий раздельно по осям
@@ -781,10 +866,95 @@ export default function GameCanvas({
         Выйти
       </button>
       
-      {/* Управление */}
-      <div className="absolute bottom-4 left-4 bg-black/50 px-4 py-2 rounded-lg text-gray-400 text-sm z-50">
-        WASD - движение | E - машина | SPACE - способность
-      </div>
+      {/* Управление (ПК) */}
+      {!isMobileDevice && (
+        <div className="absolute bottom-4 left-4 bg-black/50 px-4 py-2 rounded-lg text-gray-400 text-sm z-50">
+          WASD - движение | E - машина | SPACE - способность
+        </div>
+      )}
+      
+      {/* Мобильное управление */}
+      {isMobileDevice && (
+        <>
+          {/* Джойстик слева */}
+          <div
+            className="fixed bottom-8 left-8 z-50 touch-none"
+            style={{ width: 140, height: 140 }}
+            onTouchStart={handleJoystickStart}
+            onTouchMove={handleJoystickMove}
+            onTouchEnd={handleJoystickEnd}
+            onTouchCancel={handleJoystickEnd}
+          >
+            {/* Внешний круг */}
+            <div 
+              className="absolute inset-0 rounded-full border-4 border-white/30 bg-black/40"
+              style={{ 
+                boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)',
+              }}
+            />
+            {/* Внутренний круг (стик) */}
+            <div
+              className={`absolute rounded-full transition-colors ${joystickActive ? 'bg-blue-500' : 'bg-white/60'}`}
+              style={{
+                width: 60,
+                height: 60,
+                left: '50%',
+                top: '50%',
+                transform: `translate(calc(-50% + ${joystickPos.x}px), calc(-50% + ${joystickPos.y}px))`,
+                boxShadow: '0 4px 8px rgba(0,0,0,0.5)',
+              }}
+            />
+            {/* Стрелки направления */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30">
+              <div className="absolute top-2 text-white text-xl">▲</div>
+              <div className="absolute bottom-2 text-white text-xl">▼</div>
+              <div className="absolute left-2 text-white text-xl">◀</div>
+              <div className="absolute right-2 text-white text-xl">▶</div>
+            </div>
+          </div>
+          
+          {/* Кнопки справа */}
+          <div className="fixed bottom-8 right-8 z-50 flex flex-col gap-3 items-end">
+            {/* Кнопка взаимодействия */}
+            <button
+              onTouchStart={(e) => { e.preventDefault(); handleMobileInteract(); }}
+              className="w-20 h-20 rounded-full bg-green-600/80 border-4 border-green-400 flex items-center justify-center active:scale-95 transition-transform shadow-lg"
+              style={{ touchAction: 'none' }}
+            >
+              <span className="text-white text-2xl font-bold">E</span>
+            </button>
+            
+            {/* Кнопка способности */}
+            {toon.ability.type === 'active' && (
+              <button
+                onTouchStart={(e) => { e.preventDefault(); handleMobileAbility(); }}
+                disabled={abilityCooldown > 0}
+                className={`w-16 h-16 rounded-full border-4 flex items-center justify-center transition-all shadow-lg
+                  ${abilityCooldown > 0 
+                    ? 'bg-gray-600/80 border-gray-400' 
+                    : 'bg-purple-600/80 border-purple-400 active:scale-95'
+                  }`}
+                style={{ touchAction: 'none' }}
+              >
+                {abilityCooldown > 0 ? (
+                  <span className="text-yellow-400 font-bold">{abilityCooldown}</span>
+                ) : (
+                  <span className="text-white text-xl">⚡</span>
+                )}
+              </button>
+            )}
+          </div>
+          
+          {/* Индикатор рядом с машиной */}
+          {machines.some(m => 
+            !m.filled && Math.hypot(playerPos.x - m.position.x, playerPos.y - m.position.y) < 60
+          ) && !activeMachine && !isPanicMode && (
+            <div className="fixed bottom-32 right-8 z-50 bg-green-500/90 px-4 py-2 rounded-lg animate-bounce">
+              <span className="text-white font-bold">Нажми E! ⚙️</span>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
